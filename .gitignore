@@ -1,0 +1,7 @@
+.vagrant
+bin
+foo.txt
+./*/build
+./*/deb/build
+
+*.deb
