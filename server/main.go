@@ -3,84 +3,59 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/codegangsta/martini"
 	"github.com/garyburd/redigo/redis"
-	"github.com/gorilla/mux"
+	"github.com/martini-contrib/render"
 )
 
 var (
-	redisHost string
-	redisConn redis.Conn
-	tokens    []string
-	rc        RedisClient
+	redisAddress   = flag.String("redis-address", ":6379", "Address to the Redis server")
+	maxConnections = flag.Int("max-connections", 10, "Max connections to Redis")
 )
 
-type RedisClient struct {
-	redis_hostname      string
-	redisConnectionPool redis.Pool
-}
-
-func newRedisPool(redisHostname string) *redis.Pool {
-	return &redis.Pool{
-		MaxIdle:     1000,
-		IdleTimeout: 240 * time.Second,
-		Dial: func() (redis.Conn, error) {
-			c, err := redis.Dial("tcp", fmt.Sprintf("%s:6379", redisHostname))
-			if err != nil {
-				return nil, err
-			}
-			return c, err
-		},
-		TestOnBorrow: func(c redis.Conn, t time.Time) error {
-			_, err := c.Do("PING")
-			return err
-		},
-	}
-}
-
-func NewRedisClient(redisHostname string) (*RedisClient, error) {
-	c := &RedisClient{redis_hostname: redisHostname}
-	c.redisConnectionPool = *newRedisPool(redisHostname)
-	c.redisConnectionPool.Get().Do("PING")
-	if c.redisConnectionPool.ActiveCount() == 0 {
-		return nil, fmt.Errorf("Unable to connect to Redis")
-	}
-	return c, nil
-}
-
-func Index(w http.ResponseWriter, r *http.Request) {
-	token := strings.TrimSpace(r.FormValue("token"))
-	rc, err := NewRedisClient(redisHost)
-	if err != nil {
-		panic(err)
-	}
-
-	status, err := redis.Int(rc.redisConnectionPool.Get().Do("GET", token))
-	if err != nil {
-		fmt.Print("-")
-		http.Error(w, "0", 403)
-	}
-	if status == 1 {
-		fmt.Print(".")
-		fmt.Fprintln(w, status)
-	}
-}
-
 func main() {
-	flag.StringVar(&redisHost, "redis-host", "localhost", "Specify the redis hostname")
+	martini.Env = martini.Prod
+
 	flag.Parse()
 
-	rc, err := NewRedisClient(redisHost)
-	if err != nil {
-		panic(err)
-	}
-	redisConn = rc.redisConnectionPool.Get()
+	redisPool := redis.NewPool(func() (redis.Conn, error) {
+		c, err := redis.Dial("tcp", *redisAddress)
 
-	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/", Index)
-	log.Fatal(http.ListenAndServe(":8080", router))
+		if err != nil {
+			return nil, err
+		}
+
+		return c, err
+	}, *maxConnections)
+
+	defer redisPool.Close()
+
+	m := martini.Classic()
+
+	m.Map(redisPool)
+
+	m.Use(render.Renderer())
+
+	m.Post("/", func(r render.Render, pool *redis.Pool, params martini.Params, req *http.Request) {
+		token := strings.TrimSpace(req.FormValue("token"))
+
+		c := pool.Get()
+		defer c.Close()
+
+		status, err := redis.Int(c.Do("GET", token))
+		if err != nil {
+			fmt.Print("-")
+			r.JSON(403, map[string]interface{}{"status": "ERR"})
+		}
+		if status == 1 {
+			fmt.Print(".")
+			r.JSON(200, map[string]interface{}{"status": "AUTHD"})
+		}
+
+	})
+
+	m.Run()
 }
