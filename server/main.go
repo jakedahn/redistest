@@ -5,17 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/mux"
-)
-
-const (
-	secretKey = "zomgwtfbbq"
 )
 
 var (
@@ -28,19 +22,6 @@ var (
 type RedisClient struct {
 	redis_hostname      string
 	redisConnectionPool redis.Pool
-}
-
-func generateToken(emailPrefix string) string {
-	token := jwt.New(jwt.GetSigningMethod("HS256"))
-	token.Claims["email"] = fmt.Sprintf("jake+%s@foo.com", emailPrefix)
-	token.Claims["exp"] = time.Now().Add(time.Minute * 100).Unix()
-	token.Claims["groups"] = []string{"sre", "mcdev", "users"}
-
-	tokenString, err := token.SignedString([]byte(secretKey))
-	if err != nil {
-		panic(err)
-	}
-	return tokenString
 }
 
 func newRedisPool(redisHostname string) *redis.Pool {
@@ -71,40 +52,6 @@ func NewRedisClient(redisHostname string) (*RedisClient, error) {
 	return c, nil
 }
 
-// Here we will make a bunch of tokens, store them in redis
-func Setup() {
-	tokens = []string{}
-	tokenCount := 10000
-
-	for i := 0; i < tokenCount; i++ {
-		tokens = append(tokens, generateToken(strconv.Itoa(i)))
-	}
-
-	for i := 0; i < tokenCount; i++ {
-		token := tokens[i]
-		redisConn.Do("SET", token, 1)
-	}
-	fmt.Print("All of the tokens are now in redis")
-}
-
-func main() {
-	flag.StringVar(&redisHost, "redis-host", "localhost", "Specify the redis hostname")
-	flag.Parse()
-
-	var err error
-	rc, err := NewRedisClient(redisHost)
-	if err != nil {
-		panic(err)
-	}
-	redisConn = rc.redisConnectionPool.Get()
-
-	Setup()
-
-	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/", Index)
-	log.Fatal(http.ListenAndServe(":8080", router))
-}
-
 func Index(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.FormValue("token"))
 	rc, err := NewRedisClient(redisHost)
@@ -121,4 +68,19 @@ func Index(w http.ResponseWriter, r *http.Request) {
 		fmt.Print(".")
 		fmt.Fprintln(w, status)
 	}
+}
+
+func main() {
+	flag.StringVar(&redisHost, "redis-host", "localhost", "Specify the redis hostname")
+	flag.Parse()
+
+	rc, err := NewRedisClient(redisHost)
+	if err != nil {
+		panic(err)
+	}
+	redisConn = rc.redisConnectionPool.Get()
+
+	router := mux.NewRouter().StrictSlash(true)
+	router.HandleFunc("/", Index)
+	log.Fatal(http.ListenAndServe(":8080", router))
 }
