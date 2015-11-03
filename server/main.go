@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	jwt "github.com/dgrijalva/jwt-go"
@@ -105,17 +106,19 @@ func main() {
 }
 
 func Index(w http.ResponseWriter, r *http.Request) {
-	token := r.FormValue("token")
+	token := strings.TrimSpace(r.FormValue("token"))
 	rc, err := NewRedisClient(redisHost)
 	if err != nil {
 		panic(err)
 	}
+
 	status, err := redis.Int(rc.redisConnectionPool.Get().Do("GET", token))
 	if err != nil {
-		panic(err)
+		fmt.Print("-")
 		http.Error(w, "0", 403)
 	}
 	if status == 1 {
+		fmt.Print(".")
 		fmt.Fprintln(w, status)
 	}
 }
